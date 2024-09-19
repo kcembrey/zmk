@@ -24,13 +24,13 @@ struct layer_status_state {
 
 static void set_layer_symbol(lv_obj_t *label, struct layer_status_state state) {
     if (state.label == NULL) {
-        char text[8] = {};
+        char text[7] = {};
 
-        snprintf(text, sizeof(text), LV_SYMBOL_KEYBOARD " %i", state.index);
+        sprintf(text, LV_SYMBOL_KEYBOARD " %i", state.index);
 
         lv_label_set_text(label, text);
     } else {
-        char text[14] = {};
+        char text[13] = {};
 
         snprintf(text, sizeof(text), LV_SYMBOL_KEYBOARD " %s", state.label);
 

@@ -72,18 +72,9 @@ struct position_map_entry {
     const uint32_t positions[ZMK_POS_MAP_LEN];
 };
 
-#define ZMK_POS_MAP_LEN_CHECK(node_id)                                                             \
-    BUILD_ASSERT(ZMK_POS_MAP_LEN == DT_PROP_LEN(node_id, positions),                               \
-                 "Position maps must all have the same number of entries")
-
-DT_FOREACH_CHILD_SEP(DT_INST(0, POS_MAP_COMPAT), ZMK_POS_MAP_LEN_CHECK, (;));
-
 #define ZMK_POS_MAP_ENTRY(node_id)                                                                 \
     {                                                                                              \
-        .layout = COND_CODE_1(                                                                     \
-            UTIL_AND(DT_NODE_HAS_COMPAT(DT_PHANDLE(node_id, physical_layout), DT_DRV_COMPAT),      \
-                     DT_NODE_HAS_STATUS(DT_PHANDLE(node_id, physical_layout), okay)),              \
-            (&_CONCAT(_zmk_physical_layout_, DT_PHANDLE(node_id, physical_layout))), (NULL)),      \
+        .layout = &_CONCAT(_zmk_physical_layout_, DT_PHANDLE(node_id, physical_layout)),           \
         .positions = DT_PROP(node_id, positions),                                                  \
     }
 
@@ -140,9 +131,7 @@ struct zmk_kscan_event {
     uint32_t state;
 };
 
-static struct zmk_kscan_msg_processor {
-    struct k_work work;
-} msg_processor;
+static struct zmk_kscan_msg_processor { struct k_work work; } msg_processor;
 
 K_MSGQ_DEFINE(physical_layouts_kscan_msgq, sizeof(struct zmk_kscan_event),
               CONFIG_ZMK_KSCAN_EVENT_QUEUE_SIZE, 4);
@@ -286,15 +275,13 @@ int zmk_physical_layouts_save_selected(void) {
 
 int zmk_physical_layouts_revert_selected(void) { return zmk_physical_layouts_select_initial(); }
 
-int zmk_physical_layouts_get_position_map(uint8_t source, uint8_t dest, size_t map_size,
-                                          uint32_t map[map_size]) {
+int zmk_physical_layouts_get_position_map(uint8_t source, uint8_t dest, uint32_t *map) {
     if (source >= ARRAY_SIZE(layouts) || dest >= ARRAY_SIZE(layouts)) {
         return -EINVAL;
     }
 
     const struct zmk_physical_layout *src_layout = layouts[source];
     const struct zmk_physical_layout *dest_layout = layouts[dest];
-    int max_kp = dest_layout->keys_len;
 
 #if HAVE_POS_MAP
     const struct position_map_entry *src_pos_map = NULL;
@@ -309,24 +296,11 @@ int zmk_physical_layouts_get_position_map(uint8_t source, uint8_t dest, size_t m
             dest_pos_map = &positions_maps[pm];
         }
     }
-
-    // Maps can place items "off the end" of other layouts so they are
-    // preserved but not visible, so adjust our max here if that is being used.
-    if (src_pos_map && dest_pos_map) {
-        for (int mp = 0; mp < ZMK_POS_MAP_LEN; mp++) {
-            max_kp =
-                MAX(max_kp, MAX(src_pos_map->positions[mp] + 1, dest_pos_map->positions[mp] + 1));
-        }
-    }
 #endif
 
-    if (map_size < max_kp) {
-        return -EINVAL;
-    }
+    memset(map, UINT32_MAX, dest_layout->keys_len);
 
-    memset(map, UINT32_MAX, map_size);
-
-    for (int b = 0; b < max_kp; b++) {
+    for (int b = 0; b < dest_layout->keys_len; b++) {
         bool found = false;
 
 #if HAVE_POS_MAP
@@ -355,9 +329,13 @@ int zmk_physical_layouts_get_position_map(uint8_t source, uint8_t dest, size_t m
             }
         }
 #endif
+
+        if (!found || map[b] >= src_layout->keys_len) {
+            map[b] = UINT32_MAX;
+        }
     }
 
-    return max_kp;
+    return dest_layout->keys_len;
 }
 
 #if IS_ENABLED(CONFIG_SETTINGS)
@@ -394,9 +372,10 @@ static int zmk_physical_layouts_init(void) {
 #if IS_ENABLED(CONFIG_PM_DEVICE)
     for (int l = 0; l < ARRAY_SIZE(layouts); l++) {
         const struct zmk_physical_layout *pl = layouts[l];
-        if (pl->kscan && pm_device_wakeup_is_capable(pl->kscan) &&
-            !pm_device_wakeup_enable(pl->kscan, true)) {
-            LOG_WRN("Failed to wakeup enable %s", pl->kscan->name);
+        if (pl->kscan) {
+            if (pm_device_wakeup_is_capable(pl->kscan)) {
+                pm_device_wakeup_enable(pl->kscan, true);
+            }
         }
     }
 #endif // IS_ENABLED(CONFIG_PM_DEVICE)
